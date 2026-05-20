@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leitor Noturno</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            background: #0a0a0a;
+            color: #d8d8d8;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            line-height: 2.0;
+        }
+
+        .top-bar {
+            background: #111111;
+            border-bottom: 1px solid #222;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .top-bar-left { display: flex; align-items: center; gap: 12px; }
+        .app-title { font-size: 1.1em; font-weight: 600; color: #f0c040; letter-spacing: 0.5px; }
+
+        .btn {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover { background: #252525; border-color: #555; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn.primary { background: #f0c040; color: #111; border-color: #f0c040; font-weight: 600; }
+        .btn.primary:hover { background: #ffd04d; }
+
+        .speed-box {
+            display: flex; align-items: center; gap: 8px;
+            background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 4px 8px;
+        }
+        .speed-box button {
+            background: transparent; color: #e0e0e0; border: none; width: 28px; height: 28px;
+            border-radius: 6px; cursor: pointer; font-size: 1.1em;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .speed-box button:hover { background: #333; }
+        .speed-val { font-weight: 700; color: #f0c040; min-width: 44px; text-align: center; font-size: 0.95em; }
+
+        .progress-box {
+            display: flex; align-items: center; gap: 12px;
+            font-size: 0.9em; color: #888;
+        }
+        .progress-bar-wrap { width: 120px; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #f0c040; border-radius: 3px; width: 0%; transition: width 0.3s; }
+        .time-tag { color: #f0c040; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+        .upload-screen {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-height: 100vh; padding: 40px 20px;
+        }
+        .upload-screen.hidden { display: none; }
+        .upload-title { font-size: 2.4em; color: #f0c040; margin-bottom: 10px; text-align: center; }
+        .upload-sub { color: #666; margin-bottom: 40px; text-align: center; font-size: 1.1em; }
+        .upload-zone {
+            border: 2px dashed #444; border-radius: 16px; padding: 60px 50px;
+            text-align: center; cursor: pointer; transition: all 0.3s;
+            max-width: 500px; width: 100%; background: #111;
+        }
+        .upload-zone:hover { border-color: #f0c040; background: #151515; }
+        .upload-zone.dragover { border-color: #f0c040; background: #1a1508; }
+        .upload-icon { font-size: 56px; margin-bottom: 16px; }
+        .upload-label { font-size: 1.2em; color: #ccc; margin-bottom: 8px; }
+        .upload-hint { color: #555; font-size: 0.95em; }
+        input[type="file"] { display: none; }
+
+        .reader-screen { display: none; flex: 1; flex-direction: column; max-width: 900px; width: 100%; margin: 0 auto; padding: 40px 30px 80px; }
+        .reader-screen.active { display: flex; }
+        .doc-title { font-size: 1.5em; color: #f0c040; margin-bottom: 30px; font-weight: 600; padding-bottom: 15px; border-bottom: 1px solid #222; }
+
+        .text-content {
+            font-size: 1.45em; line-height: 2.0; color: #d8d8d8;
+        }
+        .text-content p { margin-bottom: 1.4em; text-align: justify; }
+        .text-content h1, .text-content h2, .text-content h3 { color: #f0c040; margin-top: 1.8em; margin-bottom: 0.8em; line-height: 1.3; }
+        .text-content strong, .text-content b { color: #fff; font-weight: 700; }
+        .text-content em, .text-content i { color: #ccc; }
+        .text-content ul, .text-content ol { margin-bottom: 1.4em; padding-left: 2em; }
+        .text-content li { margin-bottom: 0.5em; }
+        .text-content blockquote { border-left: 3px solid #f0c040; padding-left: 20px; margin: 1.4em 0; color: #aaa; font-style: italic; }
+
+        /* Visual para partes puladas */
+        .skip-text {
+            opacity: 0.35;
+            color: #555;
+            font-size: 0.85em;
+            transition: opacity 0.3s;
+        }
+        .text-content:hover .skip-text { opacity: 0.6; }
+
+        .reading-highlight {
+            background: rgba(240, 192, 64, 0.25);
+            color: #fff;
+            border-radius: 4px;
+            padding: 2px 0;
+            box-shadow: 0 0 20px rgba(240, 192, 64, 0.1);
+            transition: all 0.15s ease;
+        }
+
+        .toast {
+            position: fixed; bottom: 30px; left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+            padding: 12px 24px; border-radius: 10px; font-size: 0.95em;
+            z-index: 200; opacity: 0; transition: all 0.3s; pointer-events: none;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        .toast.success { border-color: #4a8; color: #4a8; }
+        .toast.error { border-color: #c44; color: #c44; }
+
+        ::-webkit-scrollbar { width: 10px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 5px; }
+        ::-webkit-scrollbar-thumb:hover { background: #444; }
+
+        @media (max-width: 700px) {
+            .top-bar { padding: 10px 12px; }
+            .reader-screen { padding: 20px 16px 60px; }
+            .text-content { font-size: 1.25em; line-height: 1.9; }
+            .upload-title { font-size: 1.8em; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="upload-screen" id="uploadScreen">
+    <h1 class="upload-title">📖 Leitor Noturno</h1>
+    <p class="upload-sub">Leia documentos com conforto visual</p>
+    <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">📄</div>
+        <div class="upload-label">Clique ou arraste seu arquivo</div>
+        <div class="upload-hint">.docx &nbsp;•&nbsp; .pdf</div>
+        <input type="file" id="fileInput" accept=".docx,.pdf">
+    </div>
+</div>
+
+<div class="reader-screen" id="readerScreen">
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <span class="app-title">📖 Leitor</span>
+            <button class="btn" id="newFileBtn">📁 Novo</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <button class="btn primary" id="playBtn"><span id="playIcon">▶</span> <span id="playText">Ler</span></button>
+            <button class="btn" id="pauseBtn" disabled>⏸ Pausar</button>
+            <button class="btn" id="stopBtn" disabled>⏹ Parar</button>
+            <div class="speed-box">
+                <button id="speedDown">−</button>
+                <span class="speed-val" id="speedVal">1.0x</span>
+                <button id="speedUp">+</button>
+            </div>
+            <div class="progress-box">
+                <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar"></div></div>
+                <span id="progressText">0%</span>
+                <span class="time-tag" id="timeTag">--:--</span>
+            </div>
+        </div>
+    </div>
+    <div class="doc-title" id="docTitle">Documento</div>
+    <div class="text-content" id="textContent"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+    // Elements
+    const uploadScreen = document.getElementById('uploadScreen');
+    const readerScreen = document.getElementById('readerScreen');
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const textContent = document.getElementById('textContent');
+    const docTitle = document.getElementById('docTitle');
+    const playBtn = document.getElementById('playBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const speedUp = document.getElementById('speedUp');
+    const speedDown = document.getElementById('speedDown');
+    const speedVal = document.getElementById('speedVal');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const timeTag = document.getElementById('timeTag');
+    const playIcon = document.getElementById('playIcon');
+    const playText = document.getElementById('playText');
+    const toast = document.getElementById('toast');
+    const newFileBtn = document.getElementById('newFileBtn');
+
+    // State
+    let fullText = '';
+    let sentences = [];       // all sentence objects: { text, el, skip }
+    let readQueue = [];       // indices of sentences to read
+    let queuePos = 0;         // current position in readQueue
+    let isPlaying = false;
+    let isPaused = false;
+    let rate = 1.0;
+    let fileName = '';
+    let currentUtterance = null;
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // --- Skip Detection ---
+    const LEGAL_KEYWORDS = [
+        'redação dada', 'alterado', 'alterada', 'incluído', 'incluída',
+        'acrescentado', 'acrescentada', 'revogado', 'revogada',
+        'renumerado', 'renumerada', 'vigência suspensa',
+        'conferido', 'conferida', 'repristinado', 'repristinada',
+        'modificado', 'modificada', 'suprimido', 'suprimida',
+        'substituído', 'substituída', 'revogação', 'repealed',
+        'revoked', 'added', 'amended'
+    ];
+    const LEGAL_ACTS = [
+        'lei', 'decreto', 'decreto-lei', 'lei complementar',
+        'medida provisória', 'constituição', 'emenda', 'resolução',
+        'portaria', 'instrução normativa', 'regulamento', 'ato',
+        'decreto legislativo', 'lei ordinária', 'normativo'
+    ];
+
+    function isSkipSentence(text) {
+        const t = text.toLowerCase();
+        // Must contain a legal keyword AND a legal act reference with a number
+        const hasKeyword = LEGAL_KEYWORDS.some(k => t.includes(k.toLowerCase()));
+        const hasAct = LEGAL_ACTS.some(a => t.includes(a.toLowerCase()));
+        const hasNumber = /\d/.test(text); // contains at least one digit (law number/year)
+        return hasKeyword && hasAct && hasNumber;
+    }
+
+    // --- Upload ---
+    uploadZone.addEventListener('click', () => fileInput.click());
+    uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', e => {
+        e.preventDefault(); uploadZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+    newFileBtn.addEventListener('click', resetToUpload);
+
+    function showToast(msg, type='') {
+        toast.textContent = msg;
+        toast.className = 'toast show ' + type;
+        setTimeout(() => toast.classList.remove('show'), 3500);
+    }
+
+    async function handleFile(file) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (ext !== 'docx' && ext !== 'pdf') { showToast('Apenas .docx ou .pdf', 'error'); return; }
+        fileName = file.name.replace(/\.[^/.]+$/, '');
+        showToast('Processando...');
+        stopAudio();
+        try {
+            if (ext === 'docx') await readDocx(file);
+            else await readPdf(file);
+            enterReader();
+            showToast('Pronto para leitura!', 'success');
+        } catch (err) { showToast('Erro: ' + err.message, 'error'); console.error(err); }
+    }
+
+    function readDocx(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = e => {
+                mammoth.convertToHtml({ arrayBuffer: e.target.result })
+                    .then(result => { fullText = result.value; resolve(); })
+                    .catch(reject);
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async function readPdf(file) {
+        const buf = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        let htmlParts = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            const items = content.items;
+            let currentPara = '', lastY = null, lastX = null;
+            for (let item of items) {
+                const tx = item.transform;
+                const x = tx[4], y = tx[5];
+                const text = item.str;
+                if (lastY === null) {
+                    currentPara += text;
+                } else {
+                    const yDiff = Math.abs(y - lastY);
+                    const xDiff = x - lastX;
+                    if (yDiff < 5) {
+                        currentPara += (xDiff > (item.width||0)*0.3 ? ' ' : '') + text;
+                    } else if (yDiff < 15) {
+                        currentPara += ' ' + text;
+                    } else {
+                        if (currentPara.trim()) htmlParts.push('<p>' + escapeHtml(currentPara.trim()) + '</p>');
+                        currentPara = text;
+                    }
+                }
+                lastY = y;
+                lastX = x + (item.width || 0);
+            }
+            if (currentPara.trim()) htmlParts.push('<p>' + escapeHtml(currentPara.trim()) + '</p>');
+        }
+        fullText = htmlParts.join('\n');
+    }
+
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    function enterReader() {
+        uploadScreen.classList.add('hidden');
+        readerScreen.classList.add('active');
+        docTitle.textContent = fileName;
+        prepareText();
+        playBtn.disabled = false;
+    }
+
+    function resetToUpload() {
+        stopAudio();
+        uploadScreen.classList.remove('hidden');
+        readerScreen.classList.remove('active');
+        textContent.innerHTML = '';
+        fileInput.value = '';
+        sentences = [];
+        readQueue = [];
+        queuePos = 0;
+    }
+
+    function prepareText() {
+        textContent.innerHTML = fullText;
+        sentences = [];
+        walkAndWrap(textContent);
+        buildReadQueue();
+        queuePos = 0;
+        updateProgress();
+    }
+
+    function walkAndWrap(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent;
+            if (!text.trim()) return;
+            const parts = text.split(/([.!?]+(?:\s+|$))/);
+            let rebuilt = '';
+            for (let i = 0; i < parts.length; i += 2) {
+                const sent = (parts[i] || '') + (parts[i+1] || '');
+                if (!sent.trim()) { rebuilt += escapeHtml(sent); continue; }
+                const idx = sentences.length;
+                const skip = isSkipSentence(sent);
+                sentences.push({ text: sent, skip: skip });
+                const cls = skip ? 'sent skip-text' : 'sent';
+                rebuilt += `<span class="${cls}" data-i="${idx}">${escapeHtml(sent)}</span>`;
+            }
+            const wrapper = document.createElement('span');
+            wrapper.innerHTML = rebuilt;
+            node.parentNode.replaceChild(wrapper, node);
+        } else if (node.nodeType === Node.ELEMENT_NODE && !['SCRIPT','STYLE'].includes(node.tagName)) {
+            Array.from(node.childNodes).forEach(child => walkAndWrap(child));
+        }
+    }
+
+    function buildReadQueue() {
+        readQueue = [];
+        for (let i = 0; i < sentences.length; i++) {
+            if (!sentences[i].skip) readQueue.push(i);
+        }
+    }
+
+    function highlight(idx) {
+        document.querySelectorAll('.reading-highlight').forEach(el => el.classList.remove('reading-highlight'));
+        const el = document.querySelector(`.sent[data-i="${idx}"]`);
+        if (el) {
+            el.classList.add('reading-highlight');
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+
+    function clearHighlight() {
+        document.querySelectorAll('.reading-highlight').forEach(el => el.classList.remove('reading-highlight'));
+    }
+
+    function updateProgress() {
+        const total = readQueue.length;
+        const pct = total ? (queuePos / total) * 100 : 0;
+        progressBar.style.width = pct + '%';
+        progressText.textContent = Math.round(pct) + '%';
+
+        // Time remaining based on unread sentences
+        let wordsLeft = 0;
+        for (let i = queuePos; i < readQueue.length; i++) {
+            wordsLeft += sentences[readQueue[i]].text.split(/\s+/).filter(w => w).length;
+        }
+        const secs = wordsLeft / (2.4 * rate);
+        const m = Math.floor(secs / 60);
+        const s = Math.floor(secs % 60);
+        timeTag.textContent = `${m}:${s.toString().padStart(2,'0')}`;
+    }
+
+    // --- Speech: one utterance per sentence, chained ---
+    function speakNext() {
+        if (!window.speechSynthesis) { showToast('Navegador não suporta áudio', 'error'); return; }
+        if (queuePos >= readQueue.length) { finishAudio(); return; }
+
+        isPlaying = true;
+        isPaused = false;
+        playBtn.disabled = true;
+        pauseBtn.disabled = false;
+        stopBtn.disabled = false;
+        playIcon.textContent = '🔊';
+        playText.textContent = 'Lendo';
+
+        const sentIdx = readQueue[queuePos];
+        const text = sentences[sentIdx].text;
+
+        currentUtterance = new SpeechSynthesisUtterance(text);
+        currentUtterance.lang = 'pt-BR';
+        currentUtterance.rate = rate;
+        currentUtterance.pitch = 1;
+
+        currentUtterance.onstart = () => {
+            highlight(sentIdx);
+        };
+
+        currentUtterance.onend = () => {
+            queuePos++;
+            updateProgress();
+            if (isPlaying && !isPaused) {
+                speakNext();
+            }
+        };
+
+        currentUtterance.onerror = (e) => {
+            if (e.error === 'canceled' || e.error === 'interrupted') return;
+            console.error(e);
+            // Try to continue
+            queuePos++;
+            updateProgress();
+            if (isPlaying && !isPaused) setTimeout(() => speakNext(), 100);
+        };
+
+        window.speechSynthesis.speak(currentUtterance);
+    }
+
+    function startReading() {
+        if (isPaused) {
+            resumeReading();
+        } else {
+            queuePos = 0;
+            speakNext();
+        }
+    }
+
+    function resumeReading() {
+        if (!window.speechSynthesis) return;
+        if (isPaused) {
+            window.speechSynthesis.resume();
+            isPaused = false;
+            isPlaying = true;
+            playBtn.disabled = true;
+            pauseBtn.disabled = false;
+            playIcon.textContent = '🔊';
+            playText.textContent = 'Lendo';
+            // If it was the very end of an utterance and resume doesn't work, advance
+            setTimeout(() => {
+                if (!window.speechSynthesis.speaking && isPlaying && !isPaused) {
+                    speakNext();
+                }
+            }, 300);
+        } else {
+            queuePos = 0;
+            speakNext();
+        }
+    }
+
+    function pauseAudio() {
+        if (window.speechSynthesis) {
+            window.speechSynthesis.pause();
+            isPaused = true;
+            isPlaying = false;
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+            playIcon.textContent = '▶';
+            playText.textContent = 'Continuar';
+        }
+    }
+
+    function stopAudio() {
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        isPlaying = false;
+        isPaused = false;
+        queuePos = 0;
+        currentUtterance = null;
+        playBtn.disabled = false;
+        pauseBtn.disabled = true;
+        stopBtn.disabled = true;
+        playIcon.textContent = '▶';
+        playText.textContent = 'Ler';
+        clearHighlight();
+        updateProgress();
+    }
+
+    function finishAudio() {
+        stopAudio();
+        showToast('Leitura concluída!', 'success');
+    }
+
+    // Controls
+    playBtn.addEventListener('click', () => {
+        if (isPaused) resumeReading();
+        else startReading();
+    });
+    pauseBtn.addEventListener('click', pauseAudio);
+    stopBtn.addEventListener('click', stopAudio);
+
+    speedUp.addEventListener('click', () => {
+        if (rate < 5.0) {
+            rate = Math.round((rate + 0.1) * 10) / 10;
+            speedVal.textContent = rate.toFixed(1) + 'x';
+            updateProgress();
+        }
+    });
+
+    speedDown.addEventListener('click', () => {
+        if (rate > 0.5) {
+            rate = Math.round((rate - 0.1) * 10) / 10;
+            speedVal.textContent = rate.toFixed(1) + 'x';
+            updateProgress();
+        }
+    });
+
+    if (window.speechSynthesis) {
+        window.speechSynthesis.getVoices();
+        window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+</script>
+</body>
+</html>
