@@ -74,6 +74,11 @@
         .progress-bar-fill { height: 100%; background: #f0c040; border-radius: 3px; width: 0%; transition: width 0.3s; }
         .time-tag { color: #f0c040; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+        .nav-box {
+            display: flex; align-items: center; gap: 6px;
+        }
+        .nav-box .btn { padding: 8px 12px; }
+
         .upload-screen {
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             min-height: 100vh; padding: 40px 20px;
@@ -108,7 +113,6 @@
         .text-content li { margin-bottom: 0.5em; }
         .text-content blockquote { border-left: 3px solid #f0c040; padding-left: 20px; margin: 1.4em 0; color: #aaa; font-style: italic; }
 
-        /* Visual para partes puladas */
         .skip-text {
             opacity: 0.35;
             color: #555;
@@ -149,6 +153,7 @@
             .upload-title { font-size: 1.8em; }
         }
     </style>
+<base target="_blank">
 </head>
 <body>
 
@@ -170,6 +175,10 @@
             <button class="btn" id="newFileBtn">📁 Novo</button>
         </div>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <div class="nav-box">
+                <button class="btn" id="backBtn" title="Voltar 3 parágrafos">⏪ Voltar</button>
+                <button class="btn" id="fwdBtn" title="Avançar 3 parágrafos">⏩ Avançar</button>
+            </div>
             <button class="btn primary" id="playBtn"><span id="playIcon">▶</span> <span id="playText">Ler</span></button>
             <button class="btn" id="pauseBtn" disabled>⏸ Pausar</button>
             <button class="btn" id="stopBtn" disabled>⏹ Parar</button>
@@ -202,6 +211,8 @@
     const playBtn = document.getElementById('playBtn');
     const pauseBtn = document.getElementById('pauseBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const backBtn = document.getElementById('backBtn');
+    const fwdBtn = document.getElementById('fwdBtn');
     const speedUp = document.getElementById('speedUp');
     const speedDown = document.getElementById('speedDown');
     const speedVal = document.getElementById('speedVal');
@@ -215,7 +226,7 @@
 
     // State
     let fullText = '';
-    let sentences = [];       // all sentence objects: { text, el, skip }
+    let sentences = [];       // { text, skip }
     let readQueue = [];       // indices of sentences to read
     let queuePos = 0;         // current position in readQueue
     let isPlaying = false;
@@ -223,6 +234,9 @@
     let rate = 1.0;
     let fileName = '';
     let currentUtterance = null;
+    let timeUpdateInterval = null;
+    let lastSpeechStartTime = 0;
+    let estimatedCharsPerSec = 13.0;  // calibrated for pt-BR at 1.0x
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -245,10 +259,9 @@
 
     function isSkipSentence(text) {
         const t = text.toLowerCase();
-        // Must contain a legal keyword AND a legal act reference with a number
         const hasKeyword = LEGAL_KEYWORDS.some(k => t.includes(k.toLowerCase()));
         const hasAct = LEGAL_ACTS.some(a => t.includes(a.toLowerCase()));
-        const hasNumber = /\d/.test(text); // contains at least one digit (law number/year)
+        const hasNumber = /\d/.test(text);
         return hasKeyword && hasAct && hasNumber;
     }
 
@@ -343,6 +356,8 @@
         docTitle.textContent = fileName;
         prepareText();
         playBtn.disabled = false;
+        backBtn.disabled = false;
+        fwdBtn.disabled = false;
     }
 
     function resetToUpload() {
@@ -408,24 +423,110 @@
         document.querySelectorAll('.reading-highlight').forEach(el => el.classList.remove('reading-highlight'));
     }
 
+    // --- Precise Time Calculation ---
+    function getRemainingChars() {
+        let chars = 0;
+        for (let i = queuePos; i < readQueue.length; i++) {
+            chars += sentences[readQueue[i]].text.length;
+        }
+        return chars;
+    }
+
+    function getElapsedChars() {
+        let chars = 0;
+        for (let i = 0; i < queuePos && i < readQueue.length; i++) {
+            chars += sentences[readQueue[i]].text.length;
+        }
+        return chars;
+    }
+
+    function getTotalReadableChars() {
+        let chars = 0;
+        for (let i = 0; i < readQueue.length; i++) {
+            chars += sentences[readQueue[i]].text.length;
+        }
+        return chars;
+    }
+
+    function estimateSecondsForChars(chars) {
+        // Calibrated: ~13 chars/sec for pt-BR at 1.0x
+        return chars / (estimatedCharsPerSec * rate);
+    }
+
+    function formatTime(totalSeconds) {
+        if (totalSeconds < 0 || !isFinite(totalSeconds)) return '--:--';
+        const m = Math.floor(totalSeconds / 60);
+        const s = Math.floor(totalSeconds % 60);
+        if (m >= 60) {
+            const h = Math.floor(m / 60);
+            const rm = m % 60;
+            return `${h}:${rm.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+        }
+        return `${m}:${s.toString().padStart(2,'0')}`;
+    }
+
     function updateProgress() {
-        const total = readQueue.length;
-        const pct = total ? (queuePos / total) * 100 : 0;
+        const totalReadable = getTotalReadableChars();
+        const elapsedChars = getElapsedChars();
+        const pct = totalReadable ? (elapsedChars / totalReadable) * 100 : 0;
         progressBar.style.width = pct + '%';
         progressText.textContent = Math.round(pct) + '%';
 
-        // Time remaining based on unread sentences
-        let wordsLeft = 0;
-        for (let i = queuePos; i < readQueue.length; i++) {
-            wordsLeft += sentences[readQueue[i]].text.split(/\s+/).filter(w => w).length;
-        }
-        const secs = wordsLeft / (2.4 * rate);
-        const m = Math.floor(secs / 60);
-        const s = Math.floor(secs % 60);
-        timeTag.textContent = `${m}:${s.toString().padStart(2,'0')}`;
+        const remainingChars = getRemainingChars();
+        const secs = estimateSecondsForChars(remainingChars);
+        timeTag.textContent = formatTime(secs);
     }
 
-    // --- Speech: one utterance per sentence, chained ---
+    // Live countdown during speech
+    function startTimeCountdown() {
+        stopTimeCountdown();
+        timeUpdateInterval = setInterval(() => {
+            if (!isPlaying || isPaused) return;
+            updateProgress();
+        }, 1000);
+    }
+
+    function stopTimeCountdown() {
+        if (timeUpdateInterval) { clearInterval(timeUpdateInterval); timeUpdateInterval = null; }
+    }
+
+    // --- Navigation ---
+    function skipForward() {
+        if (!readQueue.length) return;
+        const wasPlaying = isPlaying;
+        if (isPlaying) {
+            window.speechSynthesis.cancel();
+            isPlaying = false;
+        }
+        // Advance 3 readable sentences
+        queuePos = Math.min(queuePos + 3, readQueue.length - 1);
+        highlight(readQueue[queuePos]);
+        updateProgress();
+        if (wasPlaying) {
+            setTimeout(() => speakNext(), 80);
+        }
+    }
+
+    function skipBackward() {
+        if (!readQueue.length) return;
+        const wasPlaying = isPlaying;
+        if (isPlaying) {
+            window.speechSynthesis.cancel();
+            isPlaying = false;
+        }
+        // Go back 3 readable sentences
+        queuePos = Math.max(queuePos - 3, 0);
+        highlight(readQueue[queuePos]);
+        updateProgress();
+        if (wasPlaying) {
+            setTimeout(() => speakNext(), 80);
+        }
+    }
+
+    backBtn.addEventListener('click', skipBackward);
+    fwdBtn.addEventListener('click', skipForward);
+
+    // --- Speech ---
     function speakNext() {
         if (!window.speechSynthesis) { showToast('Navegador não suporta áudio', 'error'); return; }
         if (queuePos >= readQueue.length) { finishAudio(); return; }
@@ -448,9 +549,21 @@
 
         currentUtterance.onstart = () => {
             highlight(sentIdx);
+            lastSpeechStartTime = Date.now();
+            startTimeCountdown();
         };
 
         currentUtterance.onend = () => {
+            // Calibrate speed based on actual duration vs estimated
+            const actualMs = Date.now() - lastSpeechStartTime;
+            const estMs = estimateSecondsForChars(text.length) * 1000;
+            if (actualMs > 500 && estMs > 500) {
+                const ratio = estMs / actualMs;
+                // Slowly adjust estimatedCharsPerSec toward reality (damping factor 0.1)
+                estimatedCharsPerSec = estimatedCharsPerSec * 0.9 + (estimatedCharsPerSec * ratio) * 0.1;
+                estimatedCharsPerSec = Math.max(8, Math.min(20, estimatedCharsPerSec));
+            }
+
             queuePos++;
             updateProgress();
             if (isPlaying && !isPaused) {
@@ -461,7 +574,6 @@
         currentUtterance.onerror = (e) => {
             if (e.error === 'canceled' || e.error === 'interrupted') return;
             console.error(e);
-            // Try to continue
             queuePos++;
             updateProgress();
             if (isPlaying && !isPaused) setTimeout(() => speakNext(), 100);
@@ -471,12 +583,8 @@
     }
 
     function startReading() {
-        if (isPaused) {
-            resumeReading();
-        } else {
-            queuePos = 0;
-            speakNext();
-        }
+        if (isPaused) { resumeReading(); }
+        else { queuePos = 0; speakNext(); }
     }
 
     function resumeReading() {
@@ -489,7 +597,7 @@
             pauseBtn.disabled = false;
             playIcon.textContent = '🔊';
             playText.textContent = 'Lendo';
-            // If it was the very end of an utterance and resume doesn't work, advance
+            startTimeCountdown();
             setTimeout(() => {
                 if (!window.speechSynthesis.speaking && isPlaying && !isPaused) {
                     speakNext();
@@ -510,6 +618,7 @@
             pauseBtn.disabled = true;
             playIcon.textContent = '▶';
             playText.textContent = 'Continuar';
+            stopTimeCountdown();
         }
     }
 
@@ -525,6 +634,7 @@
         playIcon.textContent = '▶';
         playText.textContent = 'Ler';
         clearHighlight();
+        stopTimeCountdown();
         updateProgress();
     }
 
@@ -534,10 +644,7 @@
     }
 
     // Controls
-    playBtn.addEventListener('click', () => {
-        if (isPaused) resumeReading();
-        else startReading();
-    });
+    playBtn.addEventListener('click', startReading);
     pauseBtn.addEventListener('click', pauseAudio);
     stopBtn.addEventListener('click', stopAudio);
 
